@@ -65,6 +65,35 @@ usertrap(void)
     intr_on();
 
     syscall();
+  } 
+  // lab 5
+  else if (r_scause() == 13 || r_scause() == 15) {
+    char* pa;
+    uint64 va = PGROUNDDOWN(r_stval());
+    if (va >= myproc()->sz) {
+        printf("usertrap(): invalid va=%p below the user stack sp=%p\n",
+                va, p->trapframe->sp);
+        p->killed = 1;
+        goto end;
+    }
+    if (va < PGROUNDUP(myproc()->trapframe->sp)) {
+        printf("usertrap(): invalid va=%p below the user stack sp=%p\n",
+             va, p->trapframe->sp);
+        p->killed = 1;
+        goto end;
+    }
+    if ((pa = kalloc()) == 0) {
+        printf("usertrap(): kalloc() failed\n");
+        p->killed = 1;
+        goto end;
+    }
+    memset(pa, 0, PGSIZE);
+    if ( mappages(p->pagetable, va, PGSIZE, (uint64)pa, PTE_W | PTE_R | PTE_U) != 0) {
+        kfree(pa);
+        printf("usertrap(): mappages() failed\n");
+        p->killed = 1;
+        goto end;
+    }
   } else if((which_dev = devintr()) != 0){
     // ok
   } else {
@@ -72,7 +101,7 @@ usertrap(void)
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
     p->killed = 1;
   }
-
+end:
   if(p->killed)
     exit(-1);
 
