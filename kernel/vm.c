@@ -110,6 +110,44 @@ walkaddr(pagetable_t pagetable, uint64 va)
   pa = PTE2PA(*pte);
   return pa;
 }
+// lab 6
+uint64
+walkcowaddr(pagetable_t pagetable, uint64 va)
+{
+  pte_t *pte;
+  uint64 pa;
+  char* mem;
+  uint flags;
+
+  if(va >= MAXVA)
+    return 0;
+
+  pte = walk(pagetable, va, 0);
+  if(pte == 0)
+    return 0;
+  if((*pte & PTE_V) == 0)
+    return 0;
+  if((*pte & PTE_U) == 0)
+    return 0;
+  pa = PTE2PA(*pte);
+  if ((*pte & PTE_W) == 0) {
+    if ((*pte & PTE_COW) == 0) {
+        return 0;
+    }
+    if ((mem = kalloc()) == 0) {
+        return 0;
+    }
+    memmove(mem, (void*)pa, PGSIZE);
+    flags = (PTE_FLAGS(*pte) & (~PTE_COW)) | PTE_W;
+    uvmunmap(pagetable, PGROUNDDOWN(va), 1, 1); // 移除原映射
+    if (mappages(pagetable, PGROUNDDOWN(va), PGSIZE, (uint64)mem, flags) != 0) {
+        kfree(mem);
+        return 0;
+    }
+    return (uint64)mem;
+  }
+  return pa;
+}
 
 // add a mapping to the kernel page table.
 // only used when booting.
@@ -311,15 +349,22 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   pte_t *pte;
   uint64 pa, i;
   uint flags;
-  char *mem;
+//   char *mem;
 
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walk(old, i, 0)) == 0)
       panic("uvmcopy: pte should exist");
     if((*pte & PTE_V) == 0)
       panic("uvmcopy: page not present");
+    // lab 6
     pa = PTE2PA(*pte);
-    flags = PTE_FLAGS(*pte);
+    flags = (PTE_FLAGS(*pte) & (~PTE_W)) | PTE_COW;
+    *pte = PA2PTE(pa) | flags;
+    if (mappages(new, i, PGSIZE, pa, flags) != 0) {
+        goto err;
+    }
+    increfcnt(pa);
+    /*
     if((mem = kalloc()) == 0)
       goto err;
     memmove(mem, (char*)pa, PGSIZE);
@@ -327,10 +372,11 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
       kfree(mem);
       goto err;
     }
+    */
   }
   return 0;
 
- err:
+err:
   uvmunmap(new, 0, i / PGSIZE, 1);
   return -1;
 }
@@ -358,7 +404,8 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 
   while(len > 0){
     va0 = PGROUNDDOWN(dstva);
-    pa0 = walkaddr(pagetable, va0);
+    // pa0 = walkaddr(pagetable, va0);
+    pa0 = walkcowaddr(pagetable, va0);
     if(pa0 == 0)
       return -1;
     n = PGSIZE - (dstva - va0);
